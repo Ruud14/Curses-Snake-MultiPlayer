@@ -8,7 +8,6 @@ import curses
 import time
 import sys
 import os
-from tkinter import messagebox
 
 
 # Let op: Curses gebruikt Y,X inplaats van X,Y.
@@ -690,7 +689,7 @@ class MultiMatchClient:
 
 
         except Exception as e:
-            messagebox.showinfo("Error while sending data to host ", str(e))
+            pass
 
     # Shows a messages the the game is starting.
     # and starts background threads for receiving and sending from and to the host.
@@ -1051,7 +1050,7 @@ class MultiMatchHost:
 
         except Exception as e:
 
-            messagebox.showinfo("Error while receiving data from client ", str(e))
+            pass
 
     # Sends game info to the client.
     def send_client_data(self, client):
@@ -1110,7 +1109,7 @@ class MultiMatchHost:
         try:
             self.draw_game()
         except Exception as e:
-            messagebox.showinfo("IN HOST START_GAME", str(e))
+            pass
 
     # Draws the lobby and continuously sends lobby info to the clients.
     def draw_lobby(self):
@@ -1381,7 +1380,7 @@ class MultiMatchHost:
             self.own_snake.reset()
             self.disconnect(True)
         except Exception as e:
-            messagebox.showinfo("in stop_game", str(e))
+            pass
 
 
 
