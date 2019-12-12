@@ -21,6 +21,7 @@ MAX_PLAYER_AMOUNT = 10
 MAX_PASSWORD_LENGTH = 25
 snake_display_symbol = 'o'
 quit_game = False
+auto_reconnect = True
 possible_powerups = {"speed":{"kind":"speed","symbol":'+',"duration":5,"color":3, "description":"Increases the snake's speed by 5."},
                 "slowness":{"kind":"slowness","symbol":'-',"duration":5,"color":3, "description":"Decreases the snake's speed by 5."},
                 "reverse":{"kind":"reverse","symbol":'R',"duration":5,"color":2, "description":"Reverses the snake's controls."},
@@ -215,7 +216,7 @@ class Navigation:
 
     # Displays the menu specified by self.current_menu.
     def display_current_menu(self):
-        global standard_game_width, standard_game_height, standard_powerup_amount, standard_player_amount, standard_password
+        global standard_game_width, standard_game_height, standard_powerup_amount, standard_player_amount, standard_password, auto_reconnect
         h, w = self.window.getmaxyx()
         # Check if the game should exit:
         if self.current_menu == "EXIT":
@@ -240,12 +241,13 @@ class Navigation:
 
         elif self.current_menu == "MultiPlayHost":
             self.in_match = True
-            try:
 
+
+            while auto_reconnect:
                 MultiMatchHost(self.window, standard_game_height, standard_game_width, standard_powerup_amount, standard_player_amount, standard_password,self.own_snake)
+                time.sleep(0.1)
+            auto_reconnect = True
 
-            except Exception as e:
-                messagebox.showinfo("IN NAVIGATION", str(e))
             # When you get here, the match is over
             self.in_match = False  # This will stop the input loop.
             self.own_snake.reset()
@@ -301,7 +303,10 @@ class Navigation:
                 password = str(curses_input(self.window, 1, 26, line_number, x, "Enter the password of the game."))
                 self.window.clear()
                 self.in_match = True
-                MultiMatchClient(self.window,ip,password,self.own_snake)
+                while auto_reconnect:
+                    MultiMatchClient(self.window,ip,password,self.own_snake)
+                    time.sleep(0.1)
+                auto_reconnect = True
                 # When you get here, the match is over
                 self.in_match = False  # This will stop the input loop.
                 self.own_snake.reset()
@@ -578,6 +583,7 @@ class MultiMatchClient:
         # Messages the shows up when the game is over.
         self.game_over_reason = "All snakes are dead."
         self.othersnakes = []
+        self.othersnake_names = []
         self.powerups = []
         self.usedpowerupcords = []
         self.unsentmessages = []
@@ -591,17 +597,21 @@ class MultiMatchClient:
         self.join()
 
     # basically causes you to leave the match.
-    def disconnect(self):
+    def disconnect(self, reconnect):
+        global auto_reconnect
+        auto_reconnect = reconnect
+        self.window.clear()
         self.running = False
         self.socket.close()
 
     # Deals with the keyboard inputs of the client while in the lobby
     def input_loop(self):
+        global auto_reconnect
         while self.running:
             key = self.window.getch()
             if self.in_lobby:
                 if key == 27:  # 27 = ESC or ALT
-                    self.disconnect()
+                    self.disconnect(False)
             else:
                 if key == curses.KEY_UP:
                     self.own_snake.set_direction([-1, 0])
@@ -612,11 +622,11 @@ class MultiMatchClient:
                 elif key == curses.KEY_RIGHT:
                     self.own_snake.set_direction([0, 1])
                 elif key == 27:  # 27 = ESC or ALT
+                    auto_reconnect = False
                     # this makes sure that the server gets notified of our death.
                     self.game_over_reason = "You left."
                     self.own_snake.is_alive = False
-                    time.sleep(2)
-                    self.disconnect()
+                    self.disconnect(False)
 
     # Removes used powerups from the list as soon as the snake has gone away from the poperups position.
     def remove_used_powerups(self):
@@ -631,7 +641,7 @@ class MultiMatchClient:
         while self.running and self.in_game:
             if self.time_to_latest_message > self.max_server_delay:
                 self.game_over_reason = "Lost connection with the host :("
-                self.disconnect()
+                self.disconnect(False)
             time.sleep(0.5)
             self.time_to_latest_message += 0.5
 
@@ -651,26 +661,36 @@ class MultiMatchClient:
                 if msg == "kill":
                     self.own_snake.is_alive = False
                 elif msg.startswith("stop"):
-                    self.game_over_reason = msg.split(" ")[1] + " won!"
+                    winner = msg.split(" ")[1]
+                    self.game_over_reason = winner + " won!"
                     # This breaks the draw_game() loop, and so runs stop_game()
                     self.in_game = False
             self.time_to_latest_message = 0
 
     # Sends game info to the host.
     def send_data(self):
-        while self.running and self.in_game:
-            # Format of the date that we're sending. = [[[1,1],[1,2],[1,3]],['message1','message2']]
-            msg = []
-            if self.unsentmessages:
-                msg = self.unsentmessages
-                self.unsentmessages = []
+        try:
+            sent = False
+            while self.running and self.in_game:
+                # Format of the date that we're sending. = [[[1,1],[1,2],[1,3]],['message1','message2']]
+                msg = []
+                if self.unsentmessages:
+                    msg = self.unsentmessages
+                    self.unsentmessages = []
 
-            if not self.own_snake.is_alive:
-                msg.append("dead")
-            try:
-                self.socket.send(pickle.dumps([self.own_snake.positions,msg]))
-            except:
-                continue
+                if not self.own_snake.is_alive:
+                    msg.append("dead")
+
+                data = pickle.dumps([self.own_snake.positions,msg])
+
+                try:
+                    self.socket.send(data)
+                except:
+                    continue
+
+
+        except Exception as e:
+            messagebox.showinfo("Error while sending data to host ", str(e))
 
     # Shows a messages the the game is starting.
     # and starts background threads for receiving and sending from and to the host.
@@ -715,7 +735,7 @@ class MultiMatchClient:
             left_border = int(w / 2 - self.width / 2)
             right_border = int(w / 2 + self.width / 2)
             top_border = int(h / 2 - self.height / 2)
-            bottom_border = int(h / 2 + self.height / 2)
+            bottom_border = int(h / 2 +self.height / 2)
             topleft = [top_border, left_border]
             bottomright = [bottom_border, right_border]
 
@@ -738,11 +758,12 @@ class MultiMatchClient:
                     if recv_data.decode() == "Start":
                         self.start_game()
                     elif recv_data.decode() == "Kick":
-                        self.disconnect()
+                        self.disconnect(False)
                 except:
                     # The data wasn't in the right format to do .decode() so it probably still is all_snakes
                     try:
                         all_snakes = pickle.loads(recv_data)
+                        self.othersnake_names = all_snakes
                     except:
                         continue
                     # Display all other client's snakes.
@@ -750,13 +771,18 @@ class MultiMatchClient:
                         self.window.attron(curses.color_pair(1))
                         # Display the host differently
                         if i == 0:
-                            self.window.addstr(top_border + i + 3, x, "HOST Snake " + str(i + 1) + " -- " + str(client))
+                            self.window.addstr(top_border + i + 3, x, "(HOST) Snake " + str(i + 1) + " -- " + str(client))
+                        elif str(client) == username:
+                            self.window.attron(curses.color_pair(4))
+                            self.window.addstr(top_border + i + 3, x, "(YOU) Snake " + str(i + 1) + " -- " + str(client))
+                            self.window.attroff(curses.color_pair(4))
                         else:
                             self.window.addstr(top_border + i + 3, x, "Snake " + str(i + 1) + " -- " + str(client))
                         self.window.attroff(curses.color_pair(1))
+                    self.othersnake_names.remove(username)
             except:
                 # Could not receive messages from the host.
-                self.disconnect()
+                self.disconnect(False)
                 break
 
             self.window.refresh()
@@ -782,32 +808,32 @@ class MultiMatchClient:
         self.socket.send(pickle.dumps([self.host_password,username]))
         return_msg = self.socket.recv(1024).decode()
 
-        try:
-            if str(return_msg) == "Acces Granted":
-                # Receive game info.
-                game_info = pickle.loads(self.socket.recv(1024))
-                self.width = game_info[1]
-                self.height = game_info[0]
-                self.window.clear()
-                self.draw_lobby()
+        if return_msg == "Acces Granted":
+            # Receive game info.
+            game_info = pickle.loads(self.socket.recv(1024))
+            self.width = game_info[1]
+            self.height = game_info[0]
+            self.window.clear()
+            self.draw_lobby()
 
+        else:
+            if return_msg == "Duplicate name":
+                msg = "There already is someone with the same username in this game, " \
+                      "go change yours if you want to join."
             else:
                 msg = "The password was incorrect."
-                self.window.attron(curses.color_pair(2))
-                self.window.addstr(y, int(x - len(msg) / 2), msg)
-                self.window.attroff(curses.color_pair(2))
-                self.window.refresh()
-                time.sleep(2)
-                self.disconnect()
-        except Exception as e:
-            pass
-            messagebox.showinfo("precies hier", "JAAA PRECIES HEIRRRR" + str(e))
+
+            self.window.attron(curses.color_pair(2))
+            self.window.addstr(y, int(x - len(msg) / 2), msg)
+            self.window.attroff(curses.color_pair(2))
+            self.window.refresh()
+            time.sleep(4)
+            self.disconnect(False)
 
     # Draws the game while it is running.
     def draw_game(self):
         while self.running and self.in_game:
             h, w = self.window.getmaxyx()
-
             left_border = int(w / 2 - self.width / 2)
             right_border = int(w / 2 + self.width / 2)
             top_border = int(h / 2 - self.height / 2)
@@ -829,9 +855,9 @@ class MultiMatchClient:
 
             # Draw your own snake.
             for pos in self.own_snake.positions:
-                self.window.attron(curses.color_pair(3))
+                self.window.attron(curses.color_pair(4))
                 self.window.addstr(top_border + pos[0], left_border + pos[1], snake_display_symbol)
-                self.window.attroff(curses.color_pair(3))
+                self.window.attroff(curses.color_pair(4))
 
             # Draw The PowerUps
             for powerup in self.powerups:
@@ -843,6 +869,13 @@ class MultiMatchClient:
             for positions in self.othersnakes:
                 for pos in positions:
                     self.window.addstr(top_border + pos[0], left_border + pos[1], snake_display_symbol)
+
+            # Draw the scoreboard
+            self.window.addstr(top_border, right_border + 2, "SCOREBOARD")
+            self.window.addstr(top_border + 1, right_border + 2, username + " : " + str(self.own_snake.length))
+            for i, user in enumerate(self.othersnake_names):
+                if len(self.othersnakes) >= i+1:
+                    self.window.addstr(top_border + 2 + i, right_border + 2, user + " : " + str(len(self.othersnakes[i])))
 
             # Apply powerups to your own snake.
             for i,powerup in enumerate(self.powerups):
@@ -892,7 +925,9 @@ class MultiMatchClient:
 
         self.in_game = False
         self.own_snake.reset()
-        self.disconnect()
+
+        if not self.game_over_reason == "You left.":
+            self.disconnect(True)
 
 
 class MultiMatchHost:
@@ -903,9 +938,9 @@ class MultiMatchHost:
         self.running = True
         self.in_lobby = True
         self.in_game = False
-        self.winner = ""
         # [client, username, positions, messages, is_alive, Time to last receive]
         self.players = []
+        self.death_order = []
         self.own_snake = own_snake
         # The maximum amount of seconds before stopping kicking a client when there isn't any data received.
         self.max_client_delay = 2.5
@@ -924,13 +959,16 @@ class MultiMatchHost:
         self.accept_clients()
 
     # basically causes the match to stop.
-    def disconnect(self):
+    def disconnect(self, reconnect):
+        global auto_reconnect
+        auto_reconnect = reconnect
+        self.window.clear()
         self.running = False
         self.socket.close()
 
     # Deals with the keyboard inputs of the host while in the lobby
     def input_loop(self):
-
+        global auto_reconnect
         while self.running:
             key = self.window.getch()
 
@@ -947,7 +985,7 @@ class MultiMatchHost:
                             client.send(b'Kick')
                         except:
                             pass
-                    self.disconnect()
+                    self.disconnect(False)
 
             elif self.in_game:
                 if key == curses.KEY_UP:
@@ -959,30 +997,37 @@ class MultiMatchHost:
                 elif key == curses.KEY_RIGHT:
                     self.own_snake.set_direction([0, 1])
                 elif key == 27:  # 27 = ESC or ALT
+                    auto_reconnect = False
                     # Kill all snakes which automatically stops the game from the draw_game() loop.
                     for player in self.players:
                         player[4] = False
+                        self.death_order.append(self.players.index(player))
                     self.own_snake.is_alive = False
+                    if -1 not in self.death_order:
+                        self.death_order.append(-1)
 
     # kill client snake if it has lost connection.
     def connection_lost_check(self, player_index):
         while self.running and self.in_game:
             if self.players[player_index][5] > self.max_client_delay:
                 self.players[player_index][4] = False
+                self.death_order.append(player_index)
                 break
             time.sleep(0.5)
             self.players[player_index][5] += 0.5
 
     # Receives client info from the client.
     def recv_client_data(self, client):
+
         try:
             while self.running and self.in_game:
                 try:
                     data = client.recv(1024)
                     data = pickle.loads(data)
-                    self.players[[ x[0] for x in self.players].index(client)][5] = 0
                 except:
                     continue
+
+                self.players[[x[0] for x in self.players].index(client)][5] = 0
                 # # Set the position of the client snake.
                 for player in self.players:
                     if player[0] == client:
@@ -998,9 +1043,15 @@ class MultiMatchHost:
                                     self.powerups.append(PowerUp(random.choice(list(possible_powerups.values())),[self.height-1,self.width-1]))
                         elif msg == "dead":
                             index = [x[0] for x in self.players].index(client)
-                            self.players[index][4] = False
-        except:
-            pass
+
+                            # Check if the snake already is dead.
+                            if index not in self.death_order:
+                                self.players[index][4] = False
+                                self.death_order.append(index)
+
+        except Exception as e:
+
+            messagebox.showinfo("Error while receiving data from client ", str(e))
 
     # Sends game info to the client.
     def send_client_data(self, client):
@@ -1020,11 +1071,10 @@ class MultiMatchHost:
     def start_game(self):
         # Send the start signal to the clients.
         for client in [x[0] for x in self.players]:
-            try:
-                client.send(b'Start')
-            except:
-                pass
+            client.send(b'Start')
+
         # Draw start messages
+        self.window.clear()
         first_message = "Alright, we're gonna start."
         second_message = "Here we go!"
         h, w = self.window.getmaxyx()
@@ -1092,9 +1142,9 @@ class MultiMatchHost:
 
             x = left_border+2
             # Display your own snake
-            self.window.attron(curses.color_pair(3))
-            self.window.addstr(top_border+3, x, "(HOST) Snake 1" + " -- " + str(username))
-            self.window.attroff(curses.color_pair(3))
+            self.window.attron(curses.color_pair(4))
+            self.window.addstr(top_border+3, x, "(YOU)(HOST) Snake 1" + " -- " + str(username))
+            self.window.attroff(curses.color_pair(4))
 
             # Display all other client's snakes.
             for i, player in enumerate(self.players):
@@ -1141,10 +1191,14 @@ class MultiMatchHost:
 
         if self.own_snake.positions[-1] in all_other_snake_positions:
             self.own_snake.is_alive = False
+            if -1 not in self.death_order:
+                self.death_order.append(-1)
 
         # Kill the snake if it's head is inside itself.
         if self.own_snake.positions.count(self.own_snake.positions[-1]) >= 2:
             self.own_snake.is_alive = False
+            if -1 not in self.death_order:
+                self.death_order.append(-1)
 
     # Deals with clients that want to connect to the lobby.
     def accept_clients(self):
@@ -1158,10 +1212,15 @@ class MultiMatchHost:
             user = data[1]
             # Check if the password was correct.
             if self.password == "" or password == self.password:
-                client.send(b'Acces Granted')
-                self.players.append([client,user,[],[],True, 0])
-                time.sleep(0.1)
-                client.send(pickle.dumps([self.height, self.width]))
+                # Check if there already is a player with the same name.
+                if user in [ x[1] for x in self.players]+[username]:
+                    client.send(b'Duplicate name')
+                    client.close()
+                else:
+                    client.send(b'Acces Granted')
+                    time.sleep(0.1)
+                    client.send(pickle.dumps([self.height, self.width]))
+                    self.players.append([client, user, [], [], True, 0])
             else:
                 client.send(b'Acces Denied')
                 client.close()
@@ -1196,9 +1255,9 @@ class MultiMatchHost:
 
             # Draw your own snake.
             for pos in self.own_snake.positions:
-                self.window.attron(curses.color_pair(3))
+                self.window.attron(curses.color_pair(4))
                 self.window.addstr(top_border + pos[0], left_border + pos[1], snake_display_symbol)
-                self.window.attroff(curses.color_pair(3))
+                self.window.attroff(curses.color_pair(4))
 
             # Draw the client snakes.
             for positions in [x[2] for x in self.players]:
@@ -1208,6 +1267,13 @@ class MultiMatchHost:
                 except:
                     # Still got no positions from this snake.
                     pass
+
+            # Draw the scoreboard
+            self.window.addstr(top_border, right_border + 2, "SCOREBOARD")
+            self.window.addstr(top_border + 1, right_border + 2, username + " : " + str(self.own_snake.length))
+            for i, player in enumerate(self.players):
+                self.window.addstr(top_border + 2 + i, right_border + 2,
+                                       player[1] + " : " + str(len(player[2])))
 
             # Apply powerups to your own snake.
             for powerup in self.powerups:
@@ -1221,30 +1287,27 @@ class MultiMatchHost:
                 # Kill the snake when it's out of the window.
                 if pos[0] <= 0 or pos[0] >= self.height:
                     self.own_snake.is_alive = False
+                    if -1 not in self.death_order:
+                        self.death_order.append(-1)
                 elif pos[1] <= 0 or pos[1] >= self.width:
                     self.own_snake.is_alive = False
+                    if -1 not in self.death_order:
+                        self.death_order.append(-1)
 
-            # Count all dead snakes to indicate if all snakes are dead.
-            dead_snakes = 0
-            if not self.own_snake.is_alive:
-                dead_snakes += 1
-            for player in self.players:
-                if not player[4]:
-                    dead_snakes += 1
+            # # Count all dead snakes to indicate if all snakes are dead.
+            # dead_snakes = 0
+            # if not self.own_snake.is_alive:
+            #     dead_snakes += 1
+            # for player in self.players:
+            #     if not player[4]:
+            #         dead_snakes += 1
+            #
+            # # Stop the game if all snakes are dead.
+            # if dead_snakes == (len(self.players)+1):
+            #     self.stop_game()
 
-            # Stop the game if all snakes are dead.
-            if dead_snakes == (len(self.players)+1):
-                #messagebox.showinfo("hmm ja", str(dead_snakes))
+            if len(self.death_order) == (len(self.players)+1):
                 self.stop_game()
-            # Choose winner if there is only one snake alive.
-            elif dead_snakes == len(self.players) and self.winner == "":
-                # The last snake is alive.
-                for i,p in enumerate(self.players):
-                    if p[4]:
-                        self.winner = self.players[i][1]
-
-                if self.winner == "":
-                    self.winner = username
 
             # Checks for colliding snakes.
             self.snake_collide_check()
@@ -1253,32 +1316,73 @@ class MultiMatchHost:
     # gets run after the match is over.
     # Shows a message when the game is over and consequently stops the whole match.
     def stop_game(self):
-        for player in self.players:
-            player[3].append("stop "+self.winner)
-        # Draw start messages
-        first_message = "Game Over!"
-        second_message = f"{self.winner} won!"
-        h, w = self.window.getmaxyx()
-        x = int(w / 2 - len(first_message) / 2)
-        y = int(h / 2)
-        self.window.attron(curses.color_pair(2))
-        self.window.addstr(y, x, first_message)
-        self.window.attroff(curses.color_pair(2))
-        self.window.refresh()
+        try:
 
-        time.sleep(1)
-        x = int(w / 2 - len(second_message) / 2)
-        y = int(h / 2 + 1)
-        self.window.attron(curses.color_pair(1))
-        self.window.addstr(y, x, second_message)
-        self.window.attroff(curses.color_pair(1))
-        self.window.refresh()
+            # Determine who won.
+            max_len = len(max([x[2] for x in self.players]+[self.own_snake.positions], key=len))
 
-        time.sleep(2)
+            longest_snakes = []
+            winner = "NOT FOUND!"
 
-        self.in_game = False
-        self.own_snake.reset()
-        self.disconnect()
+            # add all snakes with the max length to longest_snakes.
+            for positions in [x[2] for x in self.players]+[self.own_snake.positions]:
+                if len(positions) == max_len:
+                    longest_snakes.append(positions)
+
+            # Check for snakes with equal lenghts.
+            latest_death_pos = -1
+            if len(longest_snakes) > 1:
+
+                for longest_snake in longest_snakes:
+                    if longest_snake == self.own_snake.positions:
+                        death_position = self.death_order.index(-1)
+                        if death_position > latest_death_pos:
+                            latest_death_pos = death_position
+                            winner = username
+
+                    else:
+                        index = [x[2] for x in self.players].index(longest_snake)
+                        death_position = self.death_order.index(index)
+                        if death_position > latest_death_pos:
+                            latest_death_pos = death_position
+                            winner = self.players[index][1]
+
+            else:
+                if longest_snakes[0] == self.own_snake.positions:
+                    winner = username
+                else:
+                    index = [x[2] for x in self.players].index(longest_snakes[0])
+                    winner = self.players[index][1]
+
+            for player in self.players:
+                player[3].append("stop "+winner)
+                # Draw start messages
+            first_message = "Game Over!"
+            second_message = f"{winner} won!"
+            h, w = self.window.getmaxyx()
+            x = int(w / 2 - len(first_message) / 2)
+            y = int(h / 2)
+            self.window.attron(curses.color_pair(2))
+            self.window.addstr(y, x, first_message)
+            self.window.attroff(curses.color_pair(2))
+            self.window.refresh()
+
+            time.sleep(1)
+            x = int(w / 2 - len(second_message) / 2)
+            y = int(h / 2 + 1)
+            self.window.attron(curses.color_pair(1))
+            self.window.addstr(y, x, second_message)
+            self.window.attroff(curses.color_pair(1))
+            self.window.refresh()
+
+            time.sleep(2)
+
+            self.in_game = False
+            self.own_snake.reset()
+            self.disconnect(True)
+        except Exception as e:
+            messagebox.showinfo("in stop_game", str(e))
+
 
 
 class PowerUp:
