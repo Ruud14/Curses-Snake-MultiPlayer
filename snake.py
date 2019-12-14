@@ -9,7 +9,7 @@ import time
 import sys
 import os
 import locale
-locale.setlocale(locale.LC_ALL,"")
+locale.setlocale(locale.LC_CTYPE,"")
 
 # Let op: Curses gebruikt Y,X inplaats van X,Y.
 
