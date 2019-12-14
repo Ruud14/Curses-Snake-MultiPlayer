@@ -8,7 +8,8 @@ import curses
 import time
 import sys
 import os
-
+import locale
+locale.setlocale(locale.LC_ALL,"")
 
 # Let op: Curses gebruikt Y,X inplaats van X,Y.
 
