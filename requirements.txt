@@ -1,0 +1,2 @@
+windows-curses==2.0.1
+urllib3==1.25.6
